@@ -1,0 +1,12 @@
+/build/
+/dist/
+/.vs/
+/out/
+*.user
+*.suo
+*.pdb
+*.ilk
+*.obj
+*.log
+/*.png
+*.zip
