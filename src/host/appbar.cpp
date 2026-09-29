@@ -59,6 +59,18 @@ void appbar::reposition() noexcept
         SWP_NOACTIVATE | SWP_SHOWWINDOW);
 }
 
+void appbar::notify_window_position_changed() const noexcept
+{
+    if (!registered_) {
+        return;
+    }
+
+    APPBARDATA data{};
+    data.cbSize = sizeof(data);
+    data.hWnd = window_;
+    static_cast<void>(SHAppBarMessage(ABM_WINDOWPOSCHANGED, &data));
+}
+
 void appbar::detach() noexcept
 {
     if (!registered_) {

@@ -31,12 +31,12 @@ The image below is a real capture from the current Win32 build. The large hero a
 ## What works today
 
 - A full-width, DPI-aware Win32 AppBar anchored to the top edge.
-- Real application icons from the Windows overflow tray, laid out on the left.
+- Real application icons from the current Windows tray, laid out on the left; hidden icons are discovered after Explorer creates its overflow surface or after an explicit refresh.
 - Input, network, volume, battery, time, and desktop actions on the right.
 - Primary and context-menu activation forwarded to the corresponding live Explorer tray item.
 - High-quality icon lookup from executables or app packages, with a transparent capture fallback.
 - Double-buffered composition to avoid hover and refresh flicker.
-- Background tray refresh without repeatedly opening the overflow flyout.
+- Non-invasive startup and background refresh: Brimbar never opens the overflow flyout merely to initialize itself.
 - Native Windows Service host code for session lifecycle management.
 - A build-gated, one-shot Explorer bridge that currently performs read-only runtime discovery.
 

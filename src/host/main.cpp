@@ -27,9 +27,10 @@
 namespace {
 
 constexpr wchar_t window_class_name[]{L"Brimbar.TopBar"};
-constexpr wchar_t metrics_mapping_name[]{L"Local\\MenuBar.Metrics.v1"};
+constexpr wchar_t metrics_mapping_name[]{L"Local\\MenuBar.Metrics.v2"};
 constexpr std::uint32_t metrics_magic{0x3154424DU};
-constexpr std::uint32_t metrics_version{1U};
+constexpr std::uint32_t metrics_version{2U};
+constexpr std::size_t metric_count{9U};
 constexpr int logical_bar_height{28};
 constexpr int logical_tray_icon_size{16};
 constexpr UINT_PTR clock_timer_id{1U};
@@ -37,6 +38,7 @@ constexpr UINT tray_loaded_message{WM_APP + 43U};
 constexpr UINT tray_invoked_message{WM_APP + 44U};
 constexpr UINT refresh_command_id{1001U};
 constexpr UINT exit_command_id{1002U};
+constexpr UINT stats_settings_command_id{1003U};
 
 struct shared_metrics final {
     std::uint32_t magic{};
@@ -46,6 +48,15 @@ struct shared_metrics final {
     double gpu{};
     double memory{};
     double power{};
+    double cpu_temperature{};
+    double cpu_frequency{};
+    double gpu_temperature{};
+    double gpu_power{};
+    double gpu_memory_used{};
+    double gpu_memory_total{};
+    std::uint32_t enabled_mask{};
+    std::uint32_t order_count{};
+    std::array<std::uint32_t, metric_count> order{};
 };
 
 struct metric_values final {
@@ -53,6 +64,15 @@ struct metric_values final {
     std::optional<double> gpu{};
     std::optional<double> memory{};
     std::optional<double> power{};
+    std::optional<double> cpu_temperature{};
+    std::optional<double> cpu_frequency{};
+    std::optional<double> gpu_temperature{};
+    std::optional<double> gpu_power{};
+    std::optional<double> gpu_memory_used{};
+    std::optional<double> gpu_memory_total{};
+    std::uint32_t enabled_mask{0x0FU};
+    std::array<std::uint32_t, metric_count> order{0U, 1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U};
+    std::uint32_t order_count{static_cast<std::uint32_t>(metric_count)};
 };
 
 struct active_application_info final {
@@ -146,6 +166,7 @@ struct window_state final {
     std::vector<icon_handle> source_icons{};
     std::vector<std::wstring> source_icon_paths{};
     std::vector<std::pair<RECT, std::size_t>> tray_hits{};
+    RECT stats_bounds{};
     std::optional<std::size_t> hot_item{};
     metric_values metrics{};
     std::wstring active_application{L"桌面"};
@@ -192,6 +213,30 @@ struct window_state final {
     if (std::isfinite(snapshot.power) && snapshot.power >= 0.0 && snapshot.power < 10000.0) {
         result.power = snapshot.power;
     }
+    const auto valid_temperature = [](const double value) {
+        return std::isfinite(value) && value >= -20.0 && value < 200.0;
+    };
+    if (valid_temperature(snapshot.cpu_temperature)) {
+        result.cpu_temperature = snapshot.cpu_temperature;
+    }
+    if (std::isfinite(snapshot.cpu_frequency) && snapshot.cpu_frequency > 0.0 && snapshot.cpu_frequency < 10000.0) {
+        result.cpu_frequency = snapshot.cpu_frequency;
+    }
+    if (valid_temperature(snapshot.gpu_temperature)) {
+        result.gpu_temperature = snapshot.gpu_temperature;
+    }
+    if (std::isfinite(snapshot.gpu_power) && snapshot.gpu_power >= 0.0 && snapshot.gpu_power < 10000.0) {
+        result.gpu_power = snapshot.gpu_power;
+    }
+    if (std::isfinite(snapshot.gpu_memory_used) && snapshot.gpu_memory_used >= 0.0) {
+        result.gpu_memory_used = snapshot.gpu_memory_used;
+    }
+    if (std::isfinite(snapshot.gpu_memory_total) && snapshot.gpu_memory_total > 0.0) {
+        result.gpu_memory_total = snapshot.gpu_memory_total;
+    }
+    result.enabled_mask = snapshot.enabled_mask;
+    result.order_count = std::min<std::uint32_t>(snapshot.order_count, static_cast<std::uint32_t>(metric_count));
+    result.order = snapshot.order;
     return result;
 }
 
@@ -245,6 +290,46 @@ struct window_state final {
     return *value < 10.0
         ? std::format(L"{:.1f}W", *value)
         : std::format(L"{:.0f}W", *value);
+}
+
+[[nodiscard]] std::wstring format_temperature(const std::optional<double> value)
+{
+    return value ? std::format(L"{:.0f}°", *value) : L"--";
+}
+
+[[nodiscard]] std::wstring format_frequency(const std::optional<double> value)
+{
+    return value ? std::format(L"{:.1f}G", *value / 1000.0) : L"--";
+}
+
+[[nodiscard]] std::wstring format_memory(const std::optional<double> value)
+{
+    if (!value) {
+        return L"--";
+    }
+    return *value >= 1024.0
+        ? std::format(L"{:.1f}G", *value / 1024.0)
+        : std::format(L"{:.0f}M", *value);
+}
+
+[[nodiscard]] bool point_in_stats(const window_state& state, const POINT point) noexcept
+{
+    return !IsRectEmpty(&state.stats_bounds) && PtInRect(&state.stats_bounds, point);
+}
+
+void open_stats_settings() noexcept
+{
+    std::array<wchar_t, 32768> module_path{};
+    const auto length = GetModuleFileNameW(nullptr, module_path.data(), static_cast<DWORD>(module_path.size()));
+    if (length == 0U || length >= module_path.size()) {
+        return;
+    }
+
+    const auto outputs = std::filesystem::path{module_path.data()}.parent_path().parent_path().parent_path();
+    const auto settings_host = outputs / L"MenuBar" / L"publish" / L"MenuBar.exe";
+    if (std::filesystem::exists(settings_host)) {
+        ShellExecuteW(nullptr, L"open", settings_host.c_str(), L"--settings", nullptr, SW_SHOWNORMAL);
+    }
 }
 
 [[nodiscard]] icon_handle load_source_icon(const std::wstring& path) noexcept
@@ -309,6 +394,7 @@ void rebuild_source_icons(window_state& state)
 
 struct tray_load_context final {
     HWND window{};
+    bool include_overflow{};
 };
 
 void CALLBACK load_tray_async(PTP_CALLBACK_INSTANCE, void* raw_context) noexcept
@@ -317,7 +403,9 @@ void CALLBACK load_tray_async(PTP_CALLBACK_INSTANCE, void* raw_context) noexcept
     const com_runtime com{};
     auto items = std::make_unique<std::vector<brimbar::tray_item>>();
     try {
-        *items = brimbar::enumerate_all_tray_items();
+        *items = context->include_overflow
+            ? brimbar::enumerate_all_tray_items()
+            : brimbar::enumerate_available_tray_items();
     } catch (...) {
         items->clear();
     }
@@ -331,10 +419,11 @@ void CALLBACK load_tray_async(PTP_CALLBACK_INSTANCE, void* raw_context) noexcept
     static_cast<void>(items.release());
 }
 
-[[nodiscard]] bool start_tray_load(const HWND window) noexcept
+[[nodiscard]] bool start_tray_load(const HWND window, const bool include_overflow) noexcept
 {
     auto context = std::make_unique<tray_load_context>();
     context->window = window;
+    context->include_overflow = include_overflow;
     if (TrySubmitThreadpoolCallback(load_tray_async, context.get(), nullptr)) {
         static_cast<void>(context.release());
         return true;
@@ -669,11 +758,19 @@ void paint_bar(const HWND window, window_state& state) noexcept
         right -= 7;
     };
 
+    state.stats_bounds = {};
     auto draw_metric = [&](const std::wstring_view label,
                            const std::wstring& value,
                            const COLORREF accent,
                            const int width) {
         RECT metric_bounds{right - width, 1, right, bounds.bottom - 1};
+        if (IsRectEmpty(&state.stats_bounds)) {
+            state.stats_bounds = metric_bounds;
+        } else {
+            RECT combined{};
+            UnionRect(&combined, &state.stats_bounds, &metric_bounds);
+            state.stats_bounds = combined;
+        }
         const auto middle = metric_bounds.top + (metric_bounds.bottom - metric_bounds.top) / 2;
         RECT label_bounds{metric_bounds.left, metric_bounds.top, metric_bounds.right, middle + 1};
         SelectObject(dc, state.metric_label_font);
@@ -689,9 +786,23 @@ void paint_bar(const HWND window, window_state& state) noexcept
         right -= width + 2;
     };
 
+    auto metric_width = [](const std::uint32_t id) {
+        constexpr std::array widths{46, 46, 48, 52, 48, 50, 48, 52, 54};
+        return id < widths.size() ? widths[id] : 0;
+    };
+    auto enabled_metric_width = 0;
+    auto enabled_metric_count = 0;
+    for (std::uint32_t position = 0; position < state.metrics.order_count; ++position) {
+        const auto id = state.metrics.order[position];
+        if (id < metric_count && (state.metrics.enabled_mask & (1U << id)) != 0U) {
+            enabled_metric_width += metric_width(id) + 2;
+            ++enabled_metric_count;
+        }
+    }
+
     draw_separator();
     constexpr int minimum_application_width{190};
-    constexpr int reserved_metrics_width{214};
+    const auto reserved_metrics_width = enabled_metric_width + (enabled_metric_count > 0 ? 15 : 0);
     for (auto index = state.tray_items.size(); index-- > 0U;) {
         if (!state.tray_items[index].overflow ||
             right - 34 < minimum_application_width + reserved_metrics_width) {
@@ -702,11 +813,27 @@ void paint_bar(const HWND window, window_state& state) noexcept
         right -= 36;
     }
 
-    draw_separator();
-    draw_metric(L"PWR", format_power(state.metrics.power), RGB(255, 141, 161), 56);
-    draw_metric(L"RAM", format_percent(state.metrics.memory), RGB(255, 197, 104), 50);
-    draw_metric(L"GPU", format_percent(state.metrics.gpu), RGB(114, 230, 174), 50);
-    draw_metric(L"CPU", format_percent(state.metrics.cpu), RGB(101, 213, 255), 50);
+    if (enabled_metric_count > 0) {
+        draw_separator();
+        for (auto position = state.metrics.order_count; position-- > 0U;) {
+            const auto id = state.metrics.order[position];
+            if (id >= metric_count || (state.metrics.enabled_mask & (1U << id)) == 0U) {
+                continue;
+            }
+            switch (id) {
+            case 0U: draw_metric(L"CPU", format_percent(state.metrics.cpu), RGB(101, 213, 255), metric_width(id)); break;
+            case 1U: draw_metric(L"GPU", format_percent(state.metrics.gpu), RGB(114, 230, 174), metric_width(id)); break;
+            case 2U: draw_metric(L"RAM", format_percent(state.metrics.memory), RGB(255, 197, 104), metric_width(id)); break;
+            case 3U: draw_metric(L"PWR", format_power(state.metrics.power), RGB(255, 141, 161), metric_width(id)); break;
+            case 4U: draw_metric(L"CPU°", format_temperature(state.metrics.cpu_temperature), RGB(255, 166, 107), metric_width(id)); break;
+            case 5U: draw_metric(L"CPU↗", format_frequency(state.metrics.cpu_frequency), RGB(130, 185, 255), metric_width(id)); break;
+            case 6U: draw_metric(L"GPU°", format_temperature(state.metrics.gpu_temperature), RGB(127, 224, 195), metric_width(id)); break;
+            case 7U: draw_metric(L"GPU W", format_power(state.metrics.gpu_power), RGB(255, 145, 180), metric_width(id)); break;
+            case 8U: draw_metric(L"VRAM", format_memory(state.metrics.gpu_memory_used), RGB(182, 156, 255), metric_width(id)); break;
+            default: break;
+            }
+        }
+    }
 
     auto application_text_left = 10;
     if (state.active_application_icon.get() != nullptr) {
@@ -769,6 +896,7 @@ void show_background_menu(const HWND window, const POINT screen_point) noexcept
     if (menu == nullptr) {
         return;
     }
+    AppendMenuW(menu, MF_STRING, stats_settings_command_id, L"Stats 显示设置");
     AppendMenuW(menu, MF_STRING, refresh_command_id, L"刷新托盘");
     AppendMenuW(menu, MF_SEPARATOR, 0U, nullptr);
     AppendMenuW(menu, MF_STRING, exit_command_id, L"退出顶栏");
@@ -795,7 +923,7 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message, const WPARAM
         if (!state->bar.attach(window, scaled_bar_height(window))) {
             return -1;
         }
-        state->tray_load_in_progress = start_tray_load(window);
+        state->tray_load_in_progress = start_tray_load(window, false);
         SetTimer(window, clock_timer_id, 1000U, nullptr);
         return 0;
     }
@@ -836,6 +964,10 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message, const WPARAM
     }
     case WM_LBUTTONUP: {
         const POINT point{GET_X_LPARAM(l_param), GET_Y_LPARAM(l_param)};
+        if (point_in_stats(*state, point)) {
+            open_stats_settings();
+            return 0;
+        }
         const auto index = hit_test_tray(*state, point);
         if (index && *index < state->tray_items.size() && !state->tray_invoke_in_progress) {
             state->tray_invoke_in_progress = start_tray_invoke(
@@ -870,6 +1002,10 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message, const WPARAM
         }
         auto client_point = screen_point;
         ScreenToClient(window, &client_point);
+        if (point_in_stats(*state, client_point)) {
+            open_stats_settings();
+            return 0;
+        }
         const auto index = hit_test_tray(*state, client_point);
         if (index && *index < state->tray_items.size() && !state->tray_invoke_in_progress) {
             state->tray_invoke_in_progress = start_tray_invoke(
@@ -882,9 +1018,13 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message, const WPARAM
         return 0;
     }
     case WM_COMMAND:
+        if (LOWORD(w_param) == stats_settings_command_id) {
+            open_stats_settings();
+            return 0;
+        }
         if (LOWORD(w_param) == refresh_command_id) {
             if (!state->tray_load_in_progress) {
-                state->tray_load_in_progress = start_tray_load(window);
+                state->tray_load_in_progress = start_tray_load(window, true);
             }
             return 0;
         }
@@ -916,6 +1056,11 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message, const WPARAM
             state->bar.reposition();
         }
         return 0;
+    case WM_WINDOWPOSCHANGED:
+        if (state != nullptr) {
+            state->bar.notify_window_position_changed();
+        }
+        break;
     case WM_DESTROY:
         KillTimer(window, clock_timer_id);
         state->bar.detach();

@@ -18,6 +18,7 @@ public:
 
     [[nodiscard]] bool attach(HWND window, int height_pixels) noexcept;
     void reposition() noexcept;
+    void notify_window_position_changed() const noexcept;
     void detach() noexcept;
 
 private:
